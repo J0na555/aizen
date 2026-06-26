@@ -21,6 +21,7 @@ from aizen.config import (
     save_project_config,
 )
 from aizen.engine import WorkflowEngine, WorkflowDeadlock, WorkflowFailed, WorkflowPaused
+from aizen.validation import validate_workflow, ValidationError
 from aizen.models import (
     Stage,
     StageStatus,
@@ -58,7 +59,7 @@ def init(
         default_config = {
             "name": project_dir.name,
             "default_workflow": None,
-            "default_ai": "opencode",
+            "default_ai": "claude",
         }
         save_project_config(default_config, project_dir)
         console.print(f"[green]Created[/] {config_path}")
@@ -91,10 +92,17 @@ def run(
 
     wf = Workflow.model_validate(raw)
 
+    errors = validate_workflow(wf)
+    if errors:
+        err_console.print("[red]Workflow validation failed:[/]")
+        for e in errors:
+            err_console.print(f"  [red]-[/] {e}")
+        raise typer.Exit(1)
+
     ctx: dict = {
         "project_dir": str(project_dir),
         "headless": headless,
-        "ai_provider": load_project_config(project_dir).get("default_ai", "opencode"),
+        "ai_provider": load_project_config(project_dir).get("default_ai", "claude"),
     }
 
     if resume:
@@ -201,13 +209,45 @@ def resume(
     if flag.exists():
         flag.unlink()
 
-    run(workflow=workflow or "", resume=True, headless=headless)
+    if workflow:
+        run(workflow=workflow, resume=True, headless=headless)
+        return
+
+    project_dir = Path.cwd().resolve()
+    state = load(project_dir)
+    if state is None:
+        err_console.print("[red]No saved state found. Use --workflow to specify a workflow file.[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[blue]Resuming[/] workflow '{state.workflow_name}'")
+
+    ctx: dict = {
+        "project_dir": str(project_dir),
+        "headless": headless,
+        "ai_provider": load_project_config(project_dir).get("default_ai", "claude"),
+    }
+    stages = [Stage(id=sid, type=StageType.SHELL) for sid in state.stages]
+    wf = Workflow(name=state.workflow_name, stages=stages)
+    engine = WorkflowEngine(wf, state, ctx)
+
+    try:
+        final = engine.run()
+        _print_summary(final, wf)
+    except WorkflowFailed as e:
+        _print_summary(engine.state, wf)
+        err_console.print(f"\n[red]Failed:[/] {e}")
+        raise typer.Exit(1)
+    except WorkflowDeadlock as e:
+        err_console.print(f"\n[red]Deadlock:[/] {e}")
+        raise typer.Exit(1)
+    except WorkflowPaused:
+        console.print("\n[yellow]Workflow paused. Resume with [bold]aizen resume[/][/]")
 
 
 @app.command()
 def rollback(
     stage_id: str = typer.Argument(..., help="Stage ID to rollback to"),
-    workflow: str = typer.Option(None, "--workflow", "-w", help="Workflow file"),
+    workflow: str = typer.Option(..., "--workflow", "-w", help="Workflow file"),
 ) -> None:
     """Rollback to a specific stage, resetting downstream stages."""
     project_dir = Path.cwd().resolve()
@@ -217,20 +257,14 @@ def rollback(
         err_console.print("[red]No active workflow state found[/]")
         raise typer.Exit(1)
 
-    if workflow:
-        wf_path = Path(workflow)
-        if not wf_path.is_absolute():
-            wf_path = project_dir / workflow
-        if not wf_path.exists():
-            err_console.print(f"[red]Workflow file not found:[/] {wf_path}")
-            raise typer.Exit(1)
-        raw = yaml.safe_load(wf_path.read_text())
-        wf = Workflow.model_validate(raw)
-    else:
-        wf = _reconstruct_workflow(state)
-        if wf is None:
-            err_console.print("[red]No workflow file provided and state has no stage dependencies. Pass --workflow[/]")
-            raise typer.Exit(1)
+    wf_path = Path(workflow)
+    if not wf_path.is_absolute():
+        wf_path = project_dir / workflow
+    if not wf_path.exists():
+        err_console.print(f"[red]Workflow file not found:[/] {wf_path}")
+        raise typer.Exit(1)
+    raw = yaml.safe_load(wf_path.read_text())
+    wf = Workflow.model_validate(raw)
 
     try:
         updated = rollback(stage_id, state, wf.stages)
@@ -363,15 +397,6 @@ def _print_summary(state: WorkflowState, wf: Workflow) -> None:
             StageStatus.RUNNING: "[blue]→[/]",
         }.get(ss.status, "[dim]·[/]")
         console.print(f"  {icon} {stage.id}")
-
-
-def _reconstruct_workflow(state: WorkflowState) -> Workflow | None:
-    if not state.stages:
-        return None
-    stages = []
-    for sid, ss in state.stages.items():
-        stages.append(Stage(id=sid, type=StageType.SHELL))
-    return Workflow(name=state.workflow_name, stages=stages)
 
 
 def _install_plugin(url: str) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import signal
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from aizen.models import (
@@ -77,8 +78,17 @@ class WorkflowEngine:
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, term_handler)
 
+    def _check_pause_flag(self) -> None:
+        project_dir = self.context.get("project_dir")
+        if project_dir:
+            flag = Path(project_dir) / ".aizen" / "pause.flag"
+            if flag.exists():
+                self._paused = True
+                flag.unlink()
+
     def run(self, parallel: bool = False, max_workers: int = 4) -> WorkflowState:
         while True:
+            self._check_pause_flag()
             if self._paused:
                 self.state.updated_at = datetime.now(timezone.utc).isoformat()
                 save(self.state, self.context.get("project_dir"))
@@ -104,6 +114,7 @@ class WorkflowEngine:
                 raise WorkflowDeadlock(pending)
 
             for stage in ready:
+                self._check_pause_flag()
                 if self._paused:
                     raise WorkflowPaused("Execution paused by user")
                 self._execute_stage(stage)
@@ -185,7 +196,6 @@ class WorkflowEngine:
             result.completed_at = None
             self.state.stages[stage.id] = result
             save(self.state, self.context.get("project_dir"))
-            self._execute_stage(stage)
         elif stage.on_fail.value == "continue":
             pass
 
