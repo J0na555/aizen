@@ -43,6 +43,7 @@ class Stage(BaseModel):
     requires_approval: bool = False
     max_retries: int = 0
     timeout_s: int | None = None
+    stream: bool = False
     env: dict[str, str] = Field(default_factory=dict)
     variables: dict[str, Any] = Field(default_factory=dict)
 

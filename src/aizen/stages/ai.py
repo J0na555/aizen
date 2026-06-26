@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rich.live import Live
+from rich.text import Text
+
 from aizen.ai.registry import get_registry
 from aizen.models import Stage, StageState, StageStatus
 from aizen.stages.base import BaseStage
@@ -28,7 +31,11 @@ class AIRunner(BaseStage):
             ctx = dict(context or {})
             if stage.timeout_s:
                 ctx["timeout_s"] = stage.timeout_s
-            result = client.run(stage.prompt, model=stage.model, context=ctx)
+
+            if stage.stream:
+                result = self._run_streaming(client, stage, ctx)
+            else:
+                result = client.run(stage.prompt, model=stage.model, context=ctx)
 
             state.output = result
 
@@ -53,3 +60,12 @@ class AIRunner(BaseStage):
         state.completed_at = datetime.now(timezone.utc).isoformat()
         state.attempts += 1
         return state
+
+    def _run_streaming(self, client, stage: Stage, ctx: dict) -> str:
+        lines: list[str] = []
+        with Live(Text(), refresh_per_second=10, vertical_overflow="visible") as live:
+            for chunk in client.run_streaming(stage.prompt, model=stage.model, context=ctx):
+                lines.append(chunk)
+                content = "".join(lines)
+                live.update(Text.from_ansi(content))
+        return "".join(lines)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Generator
 
 from aizen.ai.base import AIClient
 
@@ -24,3 +25,19 @@ class CodexClient(AIClient):
         if result.returncode != 0:
             raise RuntimeError(result.stderr or f"Codex exited with code {result.returncode}")
         return result.stdout.strip()
+
+    def run_streaming(self, prompt: str, model: str | None = None, context: dict | None = None) -> Generator[str, None, str]:
+        if not self.is_available():
+            raise FileNotFoundError("codex CLI not found")
+        cmd = ["codex", "-p", prompt]
+        lines: list[str] = []
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            for line in proc.stdout:
+                lines.append(line)
+                yield line
+            proc.wait()
+        if proc.returncode != 0:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise RuntimeError(stderr or f"Codex exited with code {proc.returncode}")
+        full = "".join(lines).strip()
+        return full
