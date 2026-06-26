@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import signal
 import sys
 import threading
@@ -88,6 +89,52 @@ class WorkflowEngine:
             if flag.exists():
                 self._paused = True
                 flag.unlink()
+
+    def _interpolate(self, stage: Stage) -> Stage:
+        pattern = re.compile(r'\$\{([^}]+)\}')
+
+        def resolve(match: re.Match) -> str:
+            expr = match.group(1)
+
+            if expr.startswith("stages."):
+                parts = expr.split(".")
+                if len(parts) == 3:
+                    sid, field = parts[1], parts[2]
+                    ss = self.state.stages.get(sid)
+                    if ss is not None and field in ("output", "error"):
+                        val = getattr(ss, field, None)
+                        if val is not None:
+                            return str(val)
+                return match.group(0)
+
+            if expr.startswith("variables."):
+                key = expr[len("variables."):]
+                val = self.state.variables.get(key)
+                if val is not None:
+                    return str(val)
+                return match.group(0)
+
+            if expr.startswith("stage."):
+                field = expr[len("stage."):]
+                val = getattr(stage, field, None)
+                if val is not None:
+                    return str(val)
+                return match.group(0)
+
+            return match.group(0)
+
+        resolved = stage.model_copy(deep=True)
+
+        if resolved.prompt:
+            resolved.prompt = pattern.sub(resolve, resolved.prompt)
+        if resolved.command:
+            resolved.command = pattern.sub(resolve, resolved.command)
+        resolved.env = {k: pattern.sub(resolve, v) for k, v in resolved.env.items()}
+        resolved.variables = {
+            k: pattern.sub(resolve, str(v)) if isinstance(v, str) else v
+            for k, v in resolved.variables.items()
+        }
+        return resolved
 
     def run(self, parallel: bool = False, max_workers: int = 4) -> WorkflowState:
         actual_workers = self.context.get("max_workers", max_workers)
@@ -208,7 +255,8 @@ class WorkflowEngine:
                 self.state.running_stages.discard(stage.id)
             return
 
-        result = runner.run(stage, ss, self.context)
+        resolved = self._interpolate(stage)
+        result = runner.run(resolved, ss, self.context)
 
         with self._lock:
             self.state.stages[stage.id] = result

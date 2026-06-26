@@ -234,3 +234,112 @@ def test_parallel_retry_isolation(engine):
     final = eng.run(parallel=True)
     assert final.stages["a"].status == StageStatus.COMPLETED
     assert final.stages["a"].attempts == 2
+
+
+def test_interpolate_stage_output(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL),
+        Stage(id="b", type=StageType.SHELL, command='echo ${stages.a.output}'),
+    ])
+    state = make_state(wf)
+    state.stages["a"].status = StageStatus.COMPLETED
+    state.stages["a"].output = "hello"
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[1])
+    assert resolved.command == "echo hello"
+    assert wf.stages[1].command == 'echo ${stages.a.output}'
+
+
+def test_interpolate_stage_error(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL),
+        Stage(id="b", type=StageType.SHELL, command='echo ${stages.a.error}'),
+    ])
+    state = make_state(wf)
+    state.stages["a"].status = StageStatus.FAILED
+    state.stages["a"].error = "something broke"
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[1])
+    assert resolved.command == "echo something broke"
+
+
+def test_interpolate_variables(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command='echo ${variables.foo}'),
+    ])
+    state = make_state(wf)
+    state.variables["foo"] = "bar"
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[0])
+    assert resolved.command == "echo bar"
+
+
+def test_interpolate_stage_field(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command='echo ${stage.id}'),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[0])
+    assert resolved.command == "echo a"
+
+
+def test_interpolate_unknown_passthrough(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command='echo ${unknown.path}'),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[0])
+    assert resolved.command == 'echo ${unknown.path}'
+
+
+def test_interpolate_env_values(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL),
+        Stage(id="b", type=StageType.SHELL, env={"MSG": "${stages.a.output}"}),
+    ])
+    state = make_state(wf)
+    state.stages["a"].status = StageStatus.COMPLETED
+    state.stages["a"].output = "hello"
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[1])
+    assert resolved.env["MSG"] == "hello"
+
+
+def test_interpolate_variables_field(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, variables={"msg": "Hello ${stage.id}"}),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    resolved = eng._interpolate(wf.stages[0])
+    assert resolved.variables["msg"] == "Hello a"
+
+
+def test_interpolate_in_run(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="printf hello"),
+        Stage(id="b", type=StageType.SHELL, command='echo ${stages.a.output}', depends_on=["a"]),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    final = eng.run()
+    assert final.stages["a"].status == StageStatus.COMPLETED
+    assert final.stages["b"].status == StageStatus.COMPLETED
+    assert "hello" in (final.stages["b"].output or "")
+
+
+def test_interpolate_output_chaining(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="printf first"),
+        Stage(id="b", type=StageType.SHELL, command="printf second", depends_on=["a"]),
+        Stage(id="c", type=StageType.SHELL, command='echo ${stages.a.output}-${stages.b.output}', depends_on=["b"]),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    final = eng.run()
+    assert final.stages["c"].status == StageStatus.COMPLETED
+    output = final.stages["c"].output or ""
+    assert "first" in output
+    assert "second" in output
