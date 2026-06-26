@@ -12,6 +12,7 @@ from aizen.models import (
     Workflow,
     WorkflowState,
 )
+from aizen.plugins.hooks import HookPoint, get_hook_registry
 from aizen.plugins.loader import discover_plugins
 from aizen.stages.ai import AIRunner
 from aizen.stages.base import BaseStage
@@ -58,7 +59,12 @@ class WorkflowEngine:
             StageType.PYTHON: PythonRunner(),
         }
 
-        self._setup_signal_handlers()
+        self._hooks = get_hook_registry()
+        self._headless = self.context.get("headless", False)
+        if not self._headless:
+            self._setup_signal_handlers()
+
+        self._hooks.trigger(HookPoint.ON_START, Stage(id="__start__", type=StageType.SHELL), None, self.context)
 
     def _setup_signal_handlers(self) -> None:
         def handler(signum, frame):
@@ -66,8 +72,7 @@ class WorkflowEngine:
             print("\nPausing after current stage... (SIGINT to resume, SIGTERM to quit)")
 
         def term_handler(signum, frame):
-            print("\nForcing stop...")
-            sys.exit(1)
+            raise WorkflowFailed("__sigterm__", "Forced stop (SIGTERM)")
 
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, term_handler)
@@ -105,6 +110,7 @@ class WorkflowEngine:
 
         self.state.updated_at = datetime.now(timezone.utc).isoformat()
         save(self.state, self.context.get("project_dir"))
+        self._hooks.trigger(HookPoint.ON_COMPLETE, Stage(id="__end__", type=StageType.SHELL), None, self.context)
         return self.state
 
     def _get_ready_stages(self) -> list[Stage]:
@@ -138,9 +144,15 @@ class WorkflowEngine:
     def _execute_stage(self, stage: Stage) -> None:
         self.state.current_stage_id = stage.id
 
+        ss = self.state.stages.get(stage.id)
+        self._hooks.trigger(HookPoint.BEFORE_STAGE, stage, ss, self.context)
+
         if stage.requires_approval:
-            print(f"  [approval required] Stage '{stage.id}' — run? (y/N): ", end="", flush=True)
-            answer = sys.stdin.readline().strip().lower()
+            if self._headless:
+                answer = "y"
+            else:
+                print(f"  [approval required] Stage '{stage.id}' — run? (y/N): ", end="", flush=True)
+                answer = sys.stdin.readline().strip().lower()
             if answer not in ("y", "yes"):
                 checkpoint(self.state, stage.id, StageStatus.SKIPPED, project_dir=self.context.get("project_dir"))
                 return
@@ -154,12 +166,14 @@ class WorkflowEngine:
             )
             return
 
-        ss = self.state.stages.get(stage.id)
         result = runner.run(stage, ss, self.context)
         self.state.stages[stage.id] = result
         save(self.state, self.context.get("project_dir"))
 
+        self._hooks.trigger(HookPoint.AFTER_STAGE, stage, result, self.context)
+
         if result.status == StageStatus.FAILED:
+            self._hooks.trigger(HookPoint.ON_FAILURE, stage, result, self.context)
             self._handle_failure(stage, result)
 
     def _handle_failure(self, stage: Stage, result) -> None:

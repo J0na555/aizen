@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aizen.ai.registry import get_registry
 from aizen.models import Stage, StageState, StageStatus
 from aizen.stages.base import BaseStage
 
@@ -23,14 +23,12 @@ class AIRunner(BaseStage):
         output_path = stage.output
 
         try:
-            if provider == "claude":
-                result = self._run_claude(stage, context)
-            elif provider == "opencode":
-                result = self._run_opencode(stage, context)
-            elif provider == "codex":
-                result = self._run_codex(stage, context)
-            else:
-                result = self._run_claude(stage, context)
+            registry = get_registry()
+            client = registry.resolve(provider)
+            ctx = dict(context or {})
+            if stage.timeout_s:
+                ctx["timeout_s"] = stage.timeout_s
+            result = client.run(stage.prompt, model=stage.model, context=ctx)
 
             state.output = result
 
@@ -45,7 +43,7 @@ class AIRunner(BaseStage):
         except FileNotFoundError:
             state.status = StageStatus.FAILED
             state.error = f"'{provider}' CLI not found. Is it installed?"
-        except subprocess.TimeoutExpired:
+        except TimeoutError:
             state.status = StageStatus.FAILED
             state.error = f"AI request timed out after {stage.timeout_s}s"
         except Exception as e:
@@ -55,30 +53,3 @@ class AIRunner(BaseStage):
         state.completed_at = datetime.now(timezone.utc).isoformat()
         state.attempts += 1
         return state
-
-    def _run_claude(self, stage: Stage, context: dict | None = None) -> str:
-        cmd = ["claude", "-p", stage.prompt]
-        if stage.model:
-            cmd.extend(["--model", stage.model])
-        if stage.timeout_s:
-            cmd.extend(["--timeout", str(stage.timeout_s)])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=stage.timeout_s)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr or f"Claude exited with code {result.returncode}")
-        return result.stdout.strip()
-
-    def _run_opencode(self, stage: Stage, context: dict | None = None) -> str:
-        cmd = ["opencode", "run", stage.prompt]
-        if stage.model:
-            cmd.extend(["--model", stage.model])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=stage.timeout_s)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr or f"OpenCode exited with code {result.returncode}")
-        return result.stdout.strip()
-
-    def _run_codex(self, stage: Stage, context: dict | None = None) -> str:
-        cmd = ["codex", "-p", stage.prompt]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=stage.timeout_s)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr or f"Codex exited with code {result.returncode}")
-        return result.stdout.strip()
