@@ -1,0 +1,28 @@
+name: "Build a new feature"
+description: "Full feature development pipeline with planning, coding, testing, and review"
+
+stages:
+  - id: plan
+    type: ai
+    prompt: "Analyze the requirements and create a detailed implementation plan."
+    model: claude-opus
+    output: plan.md
+
+  - id: code
+    type: ai
+    prompt: "Implement the code based on plan.md"
+    model: claude-sonnet
+    depends_on: [plan]
+
+  - id: tests
+    type: ai
+    prompt: "Write unit tests for the new code"
+    model: claude-haiku
+    depends_on: [code]
+
+  - id: verify
+    type: shell
+    command: "pytest tests/ -v"
+    depends_on: [tests, code]
+    on_fail: retry
+    max_retries: 2

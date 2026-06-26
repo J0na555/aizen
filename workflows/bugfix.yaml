@@ -1,0 +1,21 @@
+name: "Fix a bug"
+description: "Streamlined pipeline for bug fixes"
+
+stages:
+  - id: analyze
+    type: ai
+    prompt: "Analyze the bug report and identify the root cause."
+    model: claude-sonnet
+
+  - id: fix
+    type: ai
+    prompt: "Implement the fix based on the root cause analysis."
+    model: claude-sonnet
+    depends_on: [analyze]
+
+  - id: verify
+    type: shell
+    command: "pytest tests/ -v"
+    depends_on: [fix]
+    on_fail: retry
+    max_retries: 2

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Aizen project state
+.aizen/state.json
+.aizen/runs/
+
+# Config with potential secrets
+.aizen/config.yaml
+~/.aizen/config.yaml
+
+# Testing
+.cache/
+.pytest_cache/
