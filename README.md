@@ -4,17 +4,32 @@ Universal task orchestrator — a DAG-based workflow engine with multi-AI backen
 
 Pipeline stages run shell commands, AI prompts (Claude, OpenCode, Codex, Gemini), MCP server calls, or Python functions. Workflows are defined as YAML, executed in dependency order, and can be run in parallel, paused/resumed, or dry-run before execution.
 
+```
+aizen run workflows/pipeline.yaml --parallel
+```
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | New project setup, existing project workflows, quick reference |
+| [Workflows](docs/workflows.md) | Full YAML reference, stage types, validation rules |
+| [Plugins & Skills](docs/plugins.md) | Create custom runners, hook system, installation |
+| [AI Backends](docs/ai-backends.md) | Claude, Codex, Gemini, OpenCode setup and configuration |
+| [MCP Integration](docs/mcp.md) | Connect external tools via MCP servers |
+| [Advanced Guides](docs/advanced.md) | Parallel execution, variable interpolation, dry-run, streaming, resume |
+
 ## Install
 
 ```bash
 git clone https://github.com/J0na555/aizen.git
-cd ~/Documents/projects/aizen
+cd aizen
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
-Requires Python 3.10+. The `aizen` CLI is now available globally in the venv.
+Requires Python 3.10+.
 
 ## Quick Start
 
