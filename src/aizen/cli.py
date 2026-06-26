@@ -82,6 +82,7 @@ def run(
     resume: bool = typer.Option(False, "--resume", "-r", help="Resume from saved state"),
     parallel: bool = typer.Option(False, "--parallel", "-p", help="Run independent stages in parallel"),
     headless: bool = typer.Option(False, "--headless", help="Non-interactive mode (no prompts)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print execution plan without running"),
 ) -> None:
     """Run a workflow."""
     project_dir = Path.cwd().resolve()
@@ -106,6 +107,10 @@ def run(
         for e in errors:
             err_console.print(f"  [red]-[/] {e}")
         raise typer.Exit(1)
+
+    if dry_run:
+        _print_dry_run_plan(wf)
+        return
 
     ctx: dict = {
         "project_dir": str(project_dir),
@@ -380,32 +385,70 @@ def list_runs_command() -> None:
     console.print(table)
 
 
-def _print_summary(state: WorkflowState, wf: Workflow) -> None:
-    completed = sum(1 for s in state.stages.values() if s.status == StageStatus.COMPLETED)
-    failed = sum(1 for s in state.stages.values() if s.status == StageStatus.FAILED)
-    skipped = sum(1 for s in state.stages.values() if s.status == StageStatus.SKIPPED)
+def _compute_waves(stages: list[Stage]) -> list[list[Stage]]:
+    deps = {s.id: set(s.depends_on) for s in stages}
+    levels: dict[str, int] = {}
+
+    def level_of(sid: str) -> int:
+        if sid in levels:
+            return levels[sid]
+        if not deps.get(sid):
+            levels[sid] = 0
+            return 0
+        lv = 0
+        for d in deps[sid]:
+            if d in deps:
+                lv = max(lv, level_of(d) + 1)
+        levels[sid] = lv
+        return lv
+
+    for s in stages:
+        level_of(s.id)
+
+    max_level = max(levels.values()) if levels else 0
+    waves: list[list[Stage]] = [[] for _ in range(max_level + 1)]
+    for s in stages:
+        waves[levels[s.id]].append(s)
+    return waves
+
+
+def _print_dry_run_plan(wf: Workflow) -> None:
+    waves = _compute_waves(wf.stages)
+
+    console.print(f"\n[bold]Execution Plan:[/] [cyan]{wf.name}[/]")
+    if wf.description:
+        console.print(f"  {wf.description}")
+
     total = len(wf.stages)
+    wave_count = len(waves)
+    parallel_any = any(len(w) > 1 for w in waves)
+    console.print(f"  {total} stage(s) across {wave_count} wave(s)"
+                  f"{' (parallel capable)' if parallel_any else ''}")
+    console.print()
 
-    summary = f"[bold]Workflow complete:[/] {completed}/{total} stages done"
-    if failed:
-        summary += f", [red]{failed} failed[/]"
-    if skipped:
-        summary += f", [yellow]{skipped} skipped[/]"
+    wave_table = Table(title="Execution Waves")
+    wave_table.add_column("Wave", style="cyan", justify="right")
+    wave_table.add_column("Stage", style="bold")
+    wave_table.add_column("Type", style="yellow")
+    wave_table.add_column("Approval", style="bold")
+    wave_table.add_column("On Fail")
+    wave_table.add_column("Retries")
 
-    console.print(f"\n{summary}")
+    for i, wave in enumerate(waves):
+        for j, s in enumerate(wave):
+            label = f"Wave {i}" if j == 0 else ""
+            approval = "[yellow]yes[/]" if s.requires_approval else "no"
+            retries = str(s.max_retries) if s.max_retries > 0 else "-"
+            on_fail = s.on_fail.value
+            wave_table.add_row(label, s.id, s.type.value, approval, on_fail, retries)
 
-    for stage in wf.stages:
-        ss = state.stages.get(stage.id)
-        if ss is None:
-            continue
-        icon = {
-            StageStatus.COMPLETED: "[green]✓[/]",
-            StageStatus.FAILED: "[red]✗[/]",
-            StageStatus.SKIPPED: "[yellow]–[/]",
-            StageStatus.PENDING: "[dim]·[/]",
-            StageStatus.RUNNING: "[blue]→[/]",
-        }.get(ss.status, "[dim]·[/]")
-        console.print(f"  {icon} {stage.id}")
+    console.print(wave_table)
+
+    approved = [s.id for s in wf.stages if s.requires_approval]
+    if approved:
+        console.print(f"\n[yellow]Approval required for:[/] {', '.join(approved)}")
+
+    console.print("\n[dim]Dry run complete. No stages were executed.[/]")
 
 
 def _install_plugin(url: str) -> None:
