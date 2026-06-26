@@ -80,7 +80,7 @@ def rollback(
         if sid in downstream:
             state.stages[sid] = StageState(stage_id=sid)
 
-    state.current_stage_id = stage_id
+    state.running_stages = {stage_id}
     state.updated_at = datetime.now(timezone.utc).isoformat()
     return state
 
@@ -109,7 +109,7 @@ def checkpoint(
     if error is not None:
         ss.error = error
 
-    state.current_stage_id = stage_id
+    state.running_stages = {stage_id}
     save(state, project_dir)
     return state
 

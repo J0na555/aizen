@@ -33,7 +33,7 @@ def engine(tmp_path: Path, monkeypatch):
             ss.output = output
         if error is not None:
             ss.error = error
-        state.current_stage_id = stage_id
+        state.running_stages = {stage_id}
         return state
 
     monkeypatch.setattr("aizen.engine.checkpoint", fake_checkpoint)
@@ -164,3 +164,73 @@ def test_empty_workflow(engine):
     eng = engine(wf, state, {"headless": True})
     final = eng.run()
     assert final.stages == {}
+
+
+def test_parallel_execution(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="true"),
+        Stage(id="b", type=StageType.SHELL, command="true", depends_on=["a"]),
+        Stage(id="c", type=StageType.SHELL, command="true", depends_on=["a"]),
+        Stage(id="d", type=StageType.SHELL, command="true", depends_on=["b", "c"]),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    final = eng.run(parallel=True)
+    assert all(s.status == StageStatus.COMPLETED for s in final.stages.values())
+
+
+def test_parallel_multiwave(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="true"),
+        Stage(id="b", type=StageType.SHELL, command="true", depends_on=["a"]),
+        Stage(id="c", type=StageType.SHELL, command="true", depends_on=["a"]),
+        Stage(id="d", type=StageType.SHELL, command="true", depends_on=["b"]),
+        Stage(id="e", type=StageType.SHELL, command="true", depends_on=["c"]),
+        Stage(id="f", type=StageType.SHELL, command="true", depends_on=["d", "e"]),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    final = eng.run(parallel=True)
+    assert all(s.status == StageStatus.COMPLETED for s in final.stages.values())
+
+
+def test_parallel_failure_stops(engine):
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="true"),
+        Stage(id="b", type=StageType.SHELL, command="exit 1", depends_on=["a"]),
+        Stage(id="c", type=StageType.SHELL, command="true", depends_on=["a"]),
+        Stage(id="d", type=StageType.SHELL, command="true", depends_on=["b", "c"]),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    from aizen.engine import WorkflowFailed
+    with pytest.raises(WorkflowFailed):
+        eng.run(parallel=True)
+    assert state.stages["a"].status == StageStatus.COMPLETED
+    assert state.stages["b"].status == StageStatus.FAILED
+    assert state.stages["d"].status == StageStatus.PENDING
+
+
+def test_parallel_retry_isolation(engine):
+    class RetryShellRunner:
+        def __init__(self):
+            self._attempts = 0
+        def run(self, stage, state, context=None):
+            self._attempts += 1
+            state.attempts = self._attempts
+            if self._attempts < 2:
+                state.status = StageStatus.FAILED
+                state.error = "attempt failed"
+            else:
+                state.status = StageStatus.COMPLETED
+            return state
+
+    wf = make_workflow([
+        Stage(id="a", type=StageType.SHELL, command="echo a", on_fail=OnFailStrategy.RETRY, max_retries=2),
+    ])
+    state = make_state(wf)
+    eng = engine(wf, state, {"headless": True})
+    eng._runners[StageType.SHELL] = RetryShellRunner()
+    final = eng.run(parallel=True)
+    assert final.stages["a"].status == StageStatus.COMPLETED
+    assert final.stages["a"].attempts == 2

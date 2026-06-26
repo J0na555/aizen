@@ -51,7 +51,7 @@ def test_workflow_state_defaults():
     state = WorkflowState(workflow_name="test")
     assert state.workflow_name == "test"
     assert state.stages == {}
-    assert state.current_stage_id is None
+    assert state.running_stages == set()
     assert state.created_at is not None
 
 

@@ -180,10 +180,11 @@ def status() -> None:
 
     console.print(table)
 
-    if state.current_stage_id:
-        current = state.stages.get(state.current_stage_id)
+    if state.running_stages:
+        sid = next(iter(state.running_stages))
+        current = state.stages.get(sid)
         if current and current.output:
-            console.print(Panel(str(current.output)[:500], title=f"Last output: {state.current_stage_id}"))
+            console.print(Panel(str(current.output)[:500], title=f"Running: {sid}"))
 
 
 @app.command()

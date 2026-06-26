@@ -68,7 +68,7 @@ class WorkflowState(BaseModel):
     workflow_name: str
     project_path: str | None = None
     stages: dict[str, StageState] = Field(default_factory=dict)
-    current_stage_id: str | None = None
+    running_stages: set[str] = Field(default_factory=set)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     variables: dict[str, Any] = Field(default_factory=dict)

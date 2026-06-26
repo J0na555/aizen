@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import signal
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,7 @@ class WorkflowEngine:
         self.state = state
         self.context = context or {}
         self._paused = False
+        self._lock = threading.Lock()
         self._stage_index = {s.id: s for s in workflow.stages}
 
         self._runners: dict[StageType, BaseStage] = {
@@ -87,6 +90,7 @@ class WorkflowEngine:
                 flag.unlink()
 
     def run(self, parallel: bool = False, max_workers: int = 4) -> WorkflowState:
+        actual_workers = self.context.get("max_workers", max_workers)
         while True:
             self._check_pause_flag()
             if self._paused:
@@ -113,16 +117,38 @@ class WorkflowEngine:
                 ]
                 raise WorkflowDeadlock(pending)
 
-            for stage in ready:
-                self._check_pause_flag()
-                if self._paused:
-                    raise WorkflowPaused("Execution paused by user")
-                self._execute_stage(stage)
+            if parallel:
+                self._run_parallel_wave(ready, actual_workers)
+            else:
+                for stage in ready:
+                    self._check_pause_flag()
+                    if self._paused:
+                        raise WorkflowPaused("Execution paused by user")
+                    self._execute_stage(stage)
 
         self.state.updated_at = datetime.now(timezone.utc).isoformat()
         save(self.state, self.context.get("project_dir"))
         self._hooks.trigger(HookPoint.ON_COMPLETE, Stage(id="__end__", type=StageType.SHELL), None, self.context)
         return self.state
+
+    def _run_parallel_wave(self, stages: list[Stage], max_workers: int) -> None:
+        errors: list[Exception] = []
+
+        def safe_execute(stage: Stage) -> None:
+            try:
+                self._execute_stage(stage, parallel=True)
+            except WorkflowFailed as e:
+                with self._lock:
+                    errors.append(e)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(safe_execute, stages))
+
+        with self._lock:
+            save(self.state, self.context.get("project_dir"))
+
+        if errors:
+            raise errors[0]
 
     def _get_ready_stages(self) -> list[Stage]:
         ready: list[Stage] = []
@@ -152,34 +178,43 @@ class WorkflowEngine:
                 return False
         return True
 
-    def _execute_stage(self, stage: Stage) -> None:
-        self.state.current_stage_id = stage.id
+    def _execute_stage(self, stage: Stage, parallel: bool = False) -> None:
+        with self._lock:
+            self.state.running_stages.add(stage.id)
+            ss = self.state.stages.get(stage.id)
 
-        ss = self.state.stages.get(stage.id)
         self._hooks.trigger(HookPoint.BEFORE_STAGE, stage, ss, self.context)
 
         if stage.requires_approval:
-            if self._headless:
+            if self._headless or parallel:
                 answer = "y"
             else:
                 print(f"  [approval required] Stage '{stage.id}' — run? (y/N): ", end="", flush=True)
                 answer = sys.stdin.readline().strip().lower()
             if answer not in ("y", "yes"):
-                checkpoint(self.state, stage.id, StageStatus.SKIPPED, project_dir=self.context.get("project_dir"))
+                with self._lock:
+                    checkpoint(self.state, stage.id, StageStatus.SKIPPED, project_dir=self.context.get("project_dir"))
+                    self.state.running_stages.discard(stage.id)
                 return
 
         runner = self._get_runner(stage)
         if runner is None:
-            checkpoint(
-                self.state, stage.id, StageStatus.FAILED,
-                error=f"No runner for stage type '{stage.type.value}'",
-                project_dir=self.context.get("project_dir"),
-            )
+            with self._lock:
+                checkpoint(
+                    self.state, stage.id, StageStatus.FAILED,
+                    error=f"No runner for stage type '{stage.type.value}'",
+                    project_dir=self.context.get("project_dir"),
+                )
+                self.state.running_stages.discard(stage.id)
             return
 
         result = runner.run(stage, ss, self.context)
-        self.state.stages[stage.id] = result
-        save(self.state, self.context.get("project_dir"))
+
+        with self._lock:
+            self.state.stages[stage.id] = result
+            self.state.running_stages.discard(stage.id)
+            if not parallel:
+                save(self.state, self.context.get("project_dir"))
 
         self._hooks.trigger(HookPoint.AFTER_STAGE, stage, result, self.context)
 
@@ -191,11 +226,12 @@ class WorkflowEngine:
         if stage.on_fail.value == "stop":
             raise WorkflowFailed(stage.id, result.error or f"Stage '{stage.id}' failed")
         elif stage.on_fail.value == "retry" and result.attempts <= stage.max_retries:
-            result.status = StageStatus.PENDING
-            result.error = None
-            result.completed_at = None
-            self.state.stages[stage.id] = result
-            save(self.state, self.context.get("project_dir"))
+            with self._lock:
+                result.status = StageStatus.PENDING
+                result.error = None
+                result.completed_at = None
+                self.state.stages[stage.id] = result
+                save(self.state, self.context.get("project_dir"))
         elif stage.on_fail.value == "continue":
             pass
 
