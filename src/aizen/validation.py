@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aizen.models import Stage, StageType, Workflow
+from aizen.models import OnFailStrategy, Stage, StageType, Workflow
 
 
 class ValidationError(Exception):
@@ -47,6 +47,21 @@ def validate_workflow(wf: Workflow) -> list[ValidationError]:
             errors.append(ValidationError(f"Python stage '{stage.id}' has no module.function", stage.id))
         if stage.type == StageType.PLUGIN and not stage.plugin:
             errors.append(ValidationError(f"Plugin stage '{stage.id}' has no plugin name", stage.id))
+        if stage.type == StageType.MCP and not stage.command:
+            errors.append(ValidationError(f"MCP stage '{stage.id}' requires a server URL in command", stage.id))
+        if stage.on_fail == OnFailStrategy.RETRY and stage.max_retries < 1:
+            errors.append(ValidationError(
+                f"Stage '{stage.id}' has on_fail=retry but max_retries={stage.max_retries} (must be >= 1)", stage.id
+            ))
+        if stage.id in stage.depends_on:
+            errors.append(ValidationError(f"Stage '{stage.id}' depends on itself", stage.id))
+        for k, v in stage.env.items():
+            if not isinstance(v, str):
+                errors.append(ValidationError(
+                    f"Stage '{stage.id}' env['{k}'] must be a string, got {type(v).__name__}", stage.id
+                ))
+        if stage.timeout_s is not None and stage.timeout_s <= 0:
+            errors.append(ValidationError(f"Stage '{stage.id}' has timeout_s={stage.timeout_s} (must be positive)", stage.id))
 
     return errors
 

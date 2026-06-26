@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aizen.models import Stage, StageType, Workflow
+from aizen.models import OnFailStrategy, Stage, StageType, Workflow
 from aizen.validation import validate_workflow
 
 
@@ -80,3 +80,84 @@ def test_cycle_detected():
     )
     errors = validate_workflow(wf)
     assert any("cycle" in str(e).lower() for e in errors)
+
+
+def test_mcp_no_url():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="m", type=StageType.MCP)],
+    )
+    errors = validate_workflow(wf)
+    assert any("url" in str(e).lower() for e in errors)
+
+
+def test_mcp_with_url():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="m", type=StageType.MCP, command="http://localhost:8080")],
+    )
+    errors = validate_workflow(wf)
+    assert not any("url" in str(e).lower() for e in errors)
+
+
+def test_retry_requires_max_retries():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", on_fail=OnFailStrategy.RETRY, max_retries=0)],
+    )
+    errors = validate_workflow(wf)
+    assert any("max_retries" in str(e).lower() for e in errors)
+
+
+def test_retry_valid_max_retries():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", on_fail=OnFailStrategy.RETRY, max_retries=3)],
+    )
+    errors = validate_workflow(wf)
+    assert not any("max_retries" in str(e).lower() for e in errors)
+
+
+def test_self_referential_dependency():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", depends_on=["a"])],
+    )
+    errors = validate_workflow(wf)
+    assert any("depends on itself" in str(e).lower() for e in errors)
+
+
+def test_env_values_must_be_strings():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", env={"PORT": "8080"})],
+    )
+    errors = validate_workflow(wf)
+    assert not errors
+
+
+def test_timeout_must_be_positive():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", timeout_s=-1)],
+    )
+    errors = validate_workflow(wf)
+    assert any("timeout" in str(e).lower() for e in errors)
+
+
+def test_timeout_zero_invalid():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", timeout_s=0)],
+    )
+    errors = validate_workflow(wf)
+    assert any("timeout" in str(e).lower() for e in errors)
+
+
+def test_timeout_valid_positive():
+    wf = Workflow(
+        name="test",
+        stages=[Stage(id="a", type=StageType.SHELL, command="true", timeout_s=30)],
+    )
+    errors = validate_workflow(wf)
+    assert not any("timeout" in str(e).lower() for e in errors)
