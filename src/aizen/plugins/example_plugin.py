@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from aizen.models import Stage, StageState
+
+logger = logging.getLogger("aizen.plugins.example")
 from aizen.plugins.hooks import HookPoint, get_hook_registry
 from aizen.stages.base import BaseStage
 
@@ -25,7 +29,7 @@ class GreeterStage(BaseStage):
 
 
 def log_before_stage(stage, state, ctx):
-    print(f"  [hook] before_stage: {stage.id}")
+    logger.info("before_stage: %s", stage.id)
 
 
 def register_hooks() -> None:

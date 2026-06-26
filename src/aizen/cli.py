@@ -13,6 +13,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
 
+from aizen._logging import setup_logging
 from aizen.config import (
     get_global_state_dir,
     load_global_config,
@@ -44,6 +45,13 @@ from aizen.state import (
 app = typer.Typer(name="aizen", help="Universal task orchestrator")
 console = Console()
 err_console = Console(stderr=True)
+
+
+@app.callback()
+def main(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+) -> None:
+    setup_logging(verbose)
 
 
 @app.command()

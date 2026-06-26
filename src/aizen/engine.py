@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import signal
 import sys
@@ -8,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("aizen.engine")
 
 from aizen.models import (
     Stage,
@@ -74,7 +77,7 @@ class WorkflowEngine:
     def _setup_signal_handlers(self) -> None:
         def handler(signum, frame):
             self._paused = True
-            print("\nPausing after current stage... (SIGINT to resume, SIGTERM to quit)")
+            logger.warning("Pausing after current stage... (SIGINT to resume, SIGTERM to quit)")
 
         def term_handler(signum, frame):
             raise WorkflowFailed("__sigterm__", "Forced stop (SIGTERM)")
