@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +15,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
 
+from aizen import __version__
 from aizen._logging import setup_logging
 from aizen.config import (
     get_global_state_dir,
@@ -47,9 +50,17 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from aizen import __version__
+        console.print(f"aizen {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    version: bool = typer.Option(False, "--version", help="Show version and exit", callback=_version_callback),
 ) -> None:
     setup_logging(verbose)
 
@@ -291,7 +302,7 @@ def rollback(
 
 
 @app.command()
-def list_workflows() -> None:
+def list() -> None:
     """List available workflows and plugins."""
     table = Table(title="Aizen Resources")
     table.add_column("Type", style="cyan")
@@ -354,7 +365,7 @@ def plugins(
 
 
 @app.command()
-def list_runs_command() -> None:
+def list_runs() -> None:
     """Show workflow run history."""
     runs = list_runs()
     if not runs:
@@ -383,6 +394,75 @@ def list_runs_command() -> None:
         )
 
     console.print(table)
+
+
+@app.command()
+def edit(
+    stage_id: str = typer.Argument(..., help="Stage ID to edit"),
+    workflow: str = typer.Option(None, "--workflow", "-w", help="Workflow file"),
+) -> None:
+    """Edit a stage's YAML definition in $EDITOR."""
+    project_dir = Path.cwd().resolve()
+
+    if not workflow:
+        state = load(project_dir)
+        if state is None:
+            err_console.print("[red]No active workflow state or --workflow flag provided[/]")
+            raise typer.Exit(1)
+        wf_path = project_dir / "workflows" / f"{state.workflow_name}.yaml"
+        if not wf_path.exists():
+            err_console.print(f"[red]Could not locate workflow file for '{state.workflow_name}'[/]")
+            raise typer.Exit(1)
+    else:
+        wf_path = Path(workflow)
+        if not wf_path.is_absolute():
+            wf_path = project_dir / workflow
+
+    if not wf_path.exists():
+        err_console.print(f"[red]Workflow file not found:[/] {wf_path}")
+        raise typer.Exit(1)
+
+    raw = yaml.safe_load(wf_path.read_text())
+    if not raw:
+        err_console.print("[red]Empty workflow file[/]")
+        raise typer.Exit(1)
+
+    stages = raw.get("stages", [])
+    stage_idx = None
+    for i, s in enumerate(stages):
+        if s.get("id") == stage_id:
+            stage_idx = i
+            break
+
+    if stage_idx is None:
+        err_console.print(f"[red]Stage '{stage_id}' not found in workflow[/]")
+        raise typer.Exit(1)
+
+    stage_yaml = yaml.dump(stages[stage_idx], default_flow_style=False, sort_keys=False)
+
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(stage_yaml)
+        tmp_path = f.name
+
+    try:
+        subprocess.call([editor, tmp_path])
+        edited = yaml.safe_load(Path(tmp_path).read_text())
+        if not edited:
+            err_console.print("[red]Edited stage is empty — aborting[/]")
+            raise typer.Exit(1)
+        edited_stage = Stage.model_validate(edited)
+        stages[stage_idx] = edited_stage.model_dump(mode="python", by_alias=True)
+        raw["stages"] = stages
+        wf_path.write_text(yaml.dump(raw, default_flow_style=False, sort_keys=False))
+        console.print(f"[green]Stage '{stage_id}' updated[/]")
+    except typer.Exit:
+        raise
+    except Exception as e:
+        err_console.print(f"[red]Failed to update stage:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
 
 
 def _compute_waves(stages: list[Stage]) -> list[list[Stage]]:

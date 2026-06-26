@@ -1,8 +1,8 @@
 # Aizen
 
-Universal task orchestrator — a DAG-based workflow engine with multi-AI backends, plugin support, and checkpoint/resume.
+Universal task orchestrator — a DAG-based workflow engine with multi-AI backends, plugin support, parallel execution, variable interpolation, streaming AI output, and checkpoint/resume.
 
-Pipeline stages run shell commands, AI prompts (Claude, OpenCode, Codex, Gemini), MCP server calls, or Python functions. Workflows are defined as YAML, executed in dependency order, and can be paused/resumed at any point.
+Pipeline stages run shell commands, AI prompts (Claude, OpenCode, Codex, Gemini), MCP server calls, or Python functions. Workflows are defined as YAML, executed in dependency order, and can be run in parallel, paused/resumed, or dry-run before execution.
 
 ## Install
 
@@ -26,6 +26,12 @@ aizen init
 # Run a workflow
 aizen run workflows/feature.yaml
 
+# Run independent stages in parallel
+aizen run workflows/feature.yaml --parallel
+
+# Preview without executing
+aizen run workflows/feature.yaml --dry-run
+
 # Check progress
 aizen status
 
@@ -35,11 +41,17 @@ aizen resume
 # Roll back to a specific stage
 aizen rollback plan
 
+# Edit a stage's YAML in $EDITOR
+aizen edit plan
+
 # List available workflows and plugins
-aizen list-workflows
+aizen list
 
 # View run history
-aizen list-runs-command
+aizen list-runs
+
+# Show version
+aizen --version
 ```
 
 ## Workflow YAML Reference
@@ -174,6 +186,7 @@ Loads a workflow YAML, validates it, resolves the DAG, and executes stages in de
 - `--resume / -r` — Resume from the last saved checkpoint instead of starting fresh.
 - `--parallel / -p` — Run independent stages concurrently (up to 4 workers).
 - `--headless` — Non-interactive mode. Auto-approves approval gates, no prompts.
+- `--dry-run` — Print execution plan (waves, types, approval gates, retries) without running anything.
 
 On Ctrl+C, the engine pauses after the current stage and saves state. Run `aizen resume` to continue.
 
@@ -193,7 +206,7 @@ Clears the pause flag and resumes execution from the last saved state. Optionall
 
 Resets the specified stage and all transitive downstream dependencies to PENDING. Other stages keep their current status.
 
-### `aizen list-workflows`
+### `aizen list`
 
 Shows available workflows from `~/.aizen/workflows/` and the project's `workflows/` directory, plus discovered plugins and built-in stage types.
 
@@ -202,9 +215,17 @@ Shows available workflows from `~/.aizen/workflows/` and the project's `workflow
 - `list` — Shows discovered stage plugins and installed packages.
 - `install <git-url>` — Clones a git repository into `~/.aizen/plugins/`.
 
-### `aizen list-runs-command`
+### `aizen list-runs`
 
 Shows workflow run history, including current state and archived runs in `.aizen/runs/`.
+
+### `aizen edit <stage_id>`
+
+Opens the stage's YAML definition in `$EDITOR`. On save, validates and patches the workflow file. Uses current workflow from saved state, or specify `--workflow <file>`.
+
+### `aizen --version`
+
+Prints the installed package version.
 
 ## Architecture
 
@@ -313,4 +334,4 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-36 tests covering models, state management, DAG engine, config, plugins, and workflow validation.
+77 tests covering models, state management, DAG engine, config, plugins, workflow validation, parallel execution, variable interpolation, streaming, logging, dry-run, and integration.
